@@ -75,34 +75,30 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile>().configureEa
     }
 }
 
+// Prebuilt-library skip — config-cache SAFE. The prebuilt path is resolved at CONFIGURATION time
+// (Project.prebuiltRustLibrary) and only a plain Boolean/File is captured into the onlyIf closure;
+// `project`/`Task.project` is NEVER touched at execution time (doing so throws under Gradle's
+// configuration cache — gobley's RustUpTargetAddTask hit exactly that). When a prebuilt cdylib
+// exists for a triple, the cargo build AND the rustup-target-add are skipped for it — INCLUDING the
+// host target (we deliberately do NOT special-case the host: a committed/cached dylib should skip
+// the slow Rust build everywhere so consumers like SoundBound keep configuration-cache + Gradle
+// build-cache hits). Delete target/<triple>/release/<lib> (or run a clean) to force a real rebuild.
 tasks.withType<CargoBuildTask>().configureEach {
-    onlyIf {
-        val rustTarget = target.orNull ?: return@onlyIf true
-        val triple = rustTarget.rustTriple
-        val prebuiltLib = project.prebuiltRustLibrary(triple)
-        val isHostTarget = GobleyHost.current.rustTarget.rustTriple == triple
-        !prebuiltLib.exists() || isHostTarget
-    }
+    val prebuiltExists = target.orNull?.let { project.prebuiltRustLibrary(it.rustTriple).exists() } ?: false
+    onlyIf { !prebuiltExists }
 }
 
 tasks.withType<FindDynamicLibrariesTask>().configureEach {
-    val rustTarget = rustTarget.orNull ?: return@configureEach
-    val triple = rustTarget.rustTriple
-    val prebuiltLib = project.prebuiltRustLibrary(triple)
-    val isHostTarget = GobleyHost.current.rustTarget.rustTriple == triple
-    if (prebuiltLib.exists() && !isHostTarget) {
+    val rt = rustTarget.orNull ?: return@configureEach
+    val prebuiltLib = project.prebuiltRustLibrary(rt.rustTriple)
+    if (prebuiltLib.exists()) {
         searchPaths.set(listOf(prebuiltLib.parentFile))
     }
 }
 
 tasks.withType<RustUpTargetAddTask>().configureEach {
-    onlyIf {
-        val rustTarget = rustTarget.orNull ?: return@onlyIf true
-        val triple = rustTarget.rustTriple
-        val prebuiltLib = project.prebuiltRustLibrary(triple)
-        val isHostTarget = GobleyHost.current.rustTarget.rustTriple == triple
-        !prebuiltLib.exists() || isHostTarget
-    }
+    val prebuiltExists = rustTarget.orNull?.let { project.prebuiltRustLibrary(it.rustTriple).exists() } ?: false
+    onlyIf { !prebuiltExists }
 }
 
 java {
