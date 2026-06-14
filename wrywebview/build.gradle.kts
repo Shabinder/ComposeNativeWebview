@@ -68,7 +68,10 @@ dependencies {
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile>().configureEach {
     compilerOptions {
-        jvmTarget.set(JvmTarget.JVM_22)
+        // Toolchain is 22 so the vendored FFM bindings see java.lang.foreign, but emit 21
+        // bytecode (no --release, so foreign stays visible) — keeps the artifact resolvable by
+        // JVM-21 consumers like SoundBound's desktop classpath; it runs on a JDK 22+ runtime.
+        jvmTarget.set(JvmTarget.JVM_21)
     }
 }
 
@@ -106,6 +109,9 @@ java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(22)
     }
+    // Compile with JDK 22 (FFM visible) but emit 21 bytecode so JVM-21 consumers can resolve it.
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
 }
 
 mavenPublishing {
