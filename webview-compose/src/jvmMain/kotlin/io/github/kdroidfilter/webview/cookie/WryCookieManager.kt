@@ -54,38 +54,38 @@ internal class WryCookieManager : CookieManager {
 }
 
 private fun Cookie.toNativeCookie(): WebViewCookie = WebViewCookie(
-    name = name,
-    value = value,
-    domain = domain,
-    path = path,
-    expiresDateMs = expiresDate,
-    isSessionOnly = isSessionOnly,
-    maxAgeSec = maxAge,
-    sameSite = when (sameSite) {
+    name,
+    value,
+    domain,
+    path,
+    expiresDate,
+    isSessionOnly,
+    maxAge,
+    when (sameSite) {
         null -> null
         Cookie.HTTPCookieSameSitePolicy.NONE -> CookieSameSite.NONE
         Cookie.HTTPCookieSameSitePolicy.LAX -> CookieSameSite.LAX
         Cookie.HTTPCookieSameSitePolicy.STRICT -> CookieSameSite.STRICT
     },
-    isSecure = isSecure,
-    isHttpOnly = isHttpOnly,
+    isSecure,
+    isHttpOnly,
 )
 
 private fun WebViewCookie.toCompatCookie(): Cookie = Cookie(
-    name = name,
-    value = value,
-    domain = domain,
-    path = path,
-    expiresDate = expiresDateMs,
-    isSessionOnly = isSessionOnly,
-    maxAge = maxAgeSec,
-    sameSite = when (sameSite) {
+    name = name(),
+    value = value(),
+    domain = domain(),
+    path = path(),
+    expiresDate = expiresDateMs(),
+    isSessionOnly = isSessionOnly(),
+    maxAge = maxAgeSec(),
+    sameSite = when (sameSite()) {
         null -> null
         CookieSameSite.NONE -> Cookie.HTTPCookieSameSitePolicy.NONE
         CookieSameSite.LAX -> Cookie.HTTPCookieSameSitePolicy.LAX
         CookieSameSite.STRICT -> Cookie.HTTPCookieSameSitePolicy.STRICT
     },
-    isSecure = isSecure,
-    isHttpOnly = isHttpOnly,
+    isSecure = isSecure(),
+    isHttpOnly = isHttpOnly(),
 )
 

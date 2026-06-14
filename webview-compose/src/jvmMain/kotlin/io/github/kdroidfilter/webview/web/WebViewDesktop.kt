@@ -217,5 +217,5 @@ private fun Color.toRgba(): Rgba {
     val r: UByte = ((argb ushr 16) and 0xFF).toUByte()
     val g: UByte = ((argb ushr 8) and 0xFF).toUByte()
     val b: UByte = (argb and 0xFF).toUByte()
-    return Rgba(r = r, g = g, b = b, a = a)
+    return Rgba(r.toByte(), g.toByte(), b.toByte(), a.toByte())
 }

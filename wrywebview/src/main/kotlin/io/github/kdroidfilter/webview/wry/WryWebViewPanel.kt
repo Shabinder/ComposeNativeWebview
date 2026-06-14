@@ -1,6 +1,5 @@
 package io.github.kdroidfilter.webview.wry
 
-import com.sun.jna.Native
 import java.awt.BorderLayout
 import java.awt.Component
 import java.awt.event.MouseAdapter
@@ -644,14 +643,11 @@ class WryWebViewPanel(
         pendingBounds = null
     }
 
-    private fun componentHandle(component: Component): ULong {
-        return try {
-            Native.getComponentID(component).toULong()
-        } catch (e: RuntimeException) {
-            log("componentHandle failed for ${component.javaClass.name}: ${e.message}")
-            0UL
-        }
-    }
+    // JNA-free: the JNA Native.getComponentID() AWT-peer path was the only JNA call and blocks
+    // GraalVM native-image. macOS/Linux resolve the native handle via the Skiko HardwareLayer
+    // path (getContentHandle/getWindowHandle) below; this returns 0 so the Skiko path wins.
+    // Windows (where Skiko returns 0) needs a small JNI helper — tracked as a follow-up.
+    private fun componentHandle(component: Component): ULong = 0UL
 
     private fun log(message: String) {
         if (LOG_ENABLED) {
@@ -773,7 +769,7 @@ class WryWebViewPanel(
         var NATIVE_LOGGER: (String) -> Unit = { System.err.println(it) }
 
         init {
-            setNativeLogger(
+            uniffi.composewebview_wry.ComposewebviewWry.setNativeLogger(
                 object : NativeLogger {
                     override fun handleLog(data: String) {
                         if (LOG_ENABLED) {
@@ -786,7 +782,11 @@ class WryWebViewPanel(
     }
 }
 
+// Delegates to the vendored pure-FFM Java bindings (uniffi.composewebview_wry.ComposewebviewWry).
+// The native side uses i64 handles, exposed as Java `long`; this layer is the sole ULong<->long
+// boundary so the rest of WryWebViewPanel keeps its ULong handle type unchanged.
 private object NativeBindings {
+    private val ffi = uniffi.composewebview_wry.ComposewebviewWry::class.java // ensure class init
 
     fun createWebview(
         parentHandle: ULong,
@@ -806,133 +806,64 @@ private object NativeBindings {
         autoplay: Boolean,
         focused: Boolean,
         navHandler: NavigationHandler?
-    ): ULong {
-        return io.github.kdroidfilter.webview.wry.createWebview(
-            parentHandle = parentHandle,
-            width = width,
-            height = height,
-            url = url,
-            userAgent = userAgent,
-            dataDirectory = dataDirectory,
-            zoom = zoom,
-            transparent = transparent,
-            backgroundColor = backgroundColor,
-            initScript = initScript,
-            clipboard = clipboard,
-            devTools = devTools,
-            navigationGestures = navigationGestures,
-            incognito = incognito,
-            autoplay = autoplay,
-            focused = focused,
-            navHandler = navHandler
+    ): ULong = uniffi.composewebview_wry.ComposewebviewWry.createWebview(
+        parentHandle.toLong(), width, height, url, userAgent, dataDirectory, zoom, transparent,
+        backgroundColor, initScript, clipboard, devTools, navigationGestures, incognito, autoplay,
+        focused, navHandler,
+    ).toULong()
+
+    fun setBounds(id: ULong, x: Int, y: Int, width: Int, height: Int) =
+        uniffi.composewebview_wry.ComposewebviewWry.setBounds(id.toLong(), x, y, width, height)
+
+    fun loadUrl(id: ULong, url: String) =
+        uniffi.composewebview_wry.ComposewebviewWry.loadUrl(id.toLong(), url)
+
+    fun loadUrlWithHeaders(id: ULong, url: String, additionalHttpHeaders: Map<String, String>) =
+        uniffi.composewebview_wry.ComposewebviewWry.loadUrlWithHeaders(
+            id.toLong(), url, additionalHttpHeaders.map { (n, v) -> HttpHeader(n, v) },
         )
-    }
 
-    fun setBounds(id: ULong, x: Int, y: Int, width: Int, height: Int) {
-        io.github.kdroidfilter.webview.wry.setBounds(id, x, y, width, height)
-    }
+    fun loadHtml(id: ULong, html: String) =
+        uniffi.composewebview_wry.ComposewebviewWry.loadHtml(id.toLong(), html)
 
-    fun loadUrl(id: ULong, url: String) {
-        io.github.kdroidfilter.webview.wry.loadUrl(id, url)
-    }
+    fun goBack(id: ULong) = uniffi.composewebview_wry.ComposewebviewWry.goBack(id.toLong())
+    fun goForward(id: ULong) = uniffi.composewebview_wry.ComposewebviewWry.goForward(id.toLong())
+    fun reload(id: ULong) = uniffi.composewebview_wry.ComposewebviewWry.reload(id.toLong())
+    fun stopLoading(id: ULong) = uniffi.composewebview_wry.ComposewebviewWry.stopLoading(id.toLong())
 
-    fun loadUrlWithHeaders(id: ULong, url: String, additionalHttpHeaders: Map<String, String>) {
-        loadUrlWithHeaders(
-            id = id,
-            url = url,
-            headers = additionalHttpHeaders.map { (name, value) -> HttpHeader(name, value) },
-        )
-    }
+    fun evaluateJavaScript(id: ULong, script: String, callback: JavaScriptCallback) =
+        uniffi.composewebview_wry.ComposewebviewWry.evaluateJavascript(id.toLong(), script, callback)
 
-    fun loadHtml(id: ULong, html: String) {
-        io.github.kdroidfilter.webview.wry.loadHtml(id, html)
-    }
+    fun getUrl(id: ULong): String = uniffi.composewebview_wry.ComposewebviewWry.getUrl(id.toLong())
+    fun isLoading(id: ULong): Boolean = uniffi.composewebview_wry.ComposewebviewWry.isLoading(id.toLong())
+    fun getTitle(id: ULong): String = uniffi.composewebview_wry.ComposewebviewWry.getTitle(id.toLong())
+    fun canGoBack(id: ULong): Boolean = uniffi.composewebview_wry.ComposewebviewWry.canGoBack(id.toLong())
+    fun canGoForward(id: ULong): Boolean = uniffi.composewebview_wry.ComposewebviewWry.canGoForward(id.toLong())
 
-    fun goBack(id: ULong) {
-        io.github.kdroidfilter.webview.wry.goBack(id)
-    }
+    fun drainIpcMessages(id: ULong): List<String> =
+        uniffi.composewebview_wry.ComposewebviewWry.drainIpcMessages(id.toLong())
 
-    fun goForward(id: ULong) {
-        io.github.kdroidfilter.webview.wry.goForward(id)
-    }
+    fun getCookiesForUrl(id: ULong, url: String): List<WebViewCookie> =
+        uniffi.composewebview_wry.ComposewebviewWry.getCookiesForUrl(id.toLong(), url)
 
-    fun reload(id: ULong) {
-        io.github.kdroidfilter.webview.wry.reload(id)
-    }
+    fun getCookies(id: ULong): List<WebViewCookie> =
+        uniffi.composewebview_wry.ComposewebviewWry.getCookies(id.toLong())
 
-    fun stopLoading(id: ULong) {
-        io.github.kdroidfilter.webview.wry.stopLoading(id)
-    }
+    fun clearCookiesForUrl(id: ULong, url: String) =
+        uniffi.composewebview_wry.ComposewebviewWry.clearCookiesForUrl(id.toLong(), url)
 
-    fun evaluateJavaScript(id: ULong, script: String, callback: JavaScriptCallback) {
-        evaluateJavascript(id, script, callback)
-    }
+    fun clearAllCookies(id: ULong) =
+        uniffi.composewebview_wry.ComposewebviewWry.clearAllCookies(id.toLong())
 
-    fun getUrl(id: ULong): String {
-        return io.github.kdroidfilter.webview.wry.getUrl(id)
-    }
+    fun setCookie(id: ULong, cookie: WebViewCookie) =
+        uniffi.composewebview_wry.ComposewebviewWry.setCookie(id.toLong(), cookie)
 
-    fun isLoading(id: ULong): Boolean {
-        return io.github.kdroidfilter.webview.wry.isLoading(id)
-    }
+    fun destroyWebview(id: ULong) =
+        uniffi.composewebview_wry.ComposewebviewWry.destroyWebview(id.toLong())
 
-    fun getTitle(id: ULong): String {
-        return io.github.kdroidfilter.webview.wry.getTitle(id)
-    }
-
-    fun canGoBack(id: ULong): Boolean {
-        return io.github.kdroidfilter.webview.wry.canGoBack(id)
-    }
-
-    fun canGoForward(id: ULong): Boolean {
-        return io.github.kdroidfilter.webview.wry.canGoForward(id)
-    }
-
-    fun drainIpcMessages(id: ULong): List<String> {
-        return io.github.kdroidfilter.webview.wry.drainIpcMessages(id)
-    }
-
-    fun getCookiesForUrl(id: ULong, url: String): List<WebViewCookie> {
-        return io.github.kdroidfilter.webview.wry.getCookiesForUrl(id, url)
-    }
-
-    fun getCookies(id: ULong): List<WebViewCookie> {
-        return io.github.kdroidfilter.webview.wry.getCookies(id)
-    }
-
-    fun clearCookiesForUrl(id: ULong, url: String) {
-        io.github.kdroidfilter.webview.wry.clearCookiesForUrl(id, url)
-    }
-
-    fun clearAllCookies(id: ULong) {
-        io.github.kdroidfilter.webview.wry.clearAllCookies(id)
-    }
-
-    fun setCookie(id: ULong, cookie: WebViewCookie) {
-        io.github.kdroidfilter.webview.wry.setCookie(id, cookie)
-    }
-
-    fun destroyWebview(id: ULong) {
-        io.github.kdroidfilter.webview.wry.destroyWebview(id)
-    }
-
-    fun pumpGtkEvents() {
-        io.github.kdroidfilter.webview.wry.pumpGtkEvents()
-    }
-
-    fun pumpWindowsEvents() {
-        io.github.kdroidfilter.webview.wry.pumpWindowsEvents()
-    }
-
-    fun focus(id: ULong) {
-        io.github.kdroidfilter.webview.wry.focus(id)
-    }
-
-    fun openDevTools(id: ULong) {
-        io.github.kdroidfilter.webview.wry.openDevTools(id)
-    }
-
-    fun closeDevTools(id: ULong) {
-        io.github.kdroidfilter.webview.wry.closeDevTools(id)
-    }
+    fun pumpGtkEvents() = uniffi.composewebview_wry.ComposewebviewWry.pumpGtkEvents()
+    fun pumpWindowsEvents() = uniffi.composewebview_wry.ComposewebviewWry.pumpWindowsEvents()
+    fun focus(id: ULong) = uniffi.composewebview_wry.ComposewebviewWry.focus(id.toLong())
+    fun openDevTools(id: ULong) = uniffi.composewebview_wry.ComposewebviewWry.openDevTools(id.toLong())
+    fun closeDevTools(id: ULong) = uniffi.composewebview_wry.ComposewebviewWry.closeDevTools(id.toLong())
 }

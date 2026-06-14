@@ -24,7 +24,6 @@ plugins {
     alias(libs.plugins.kotlinAtomicfu)
     alias(libs.plugins.gobleyCargo)
     alias(libs.plugins.gobleyRust)
-    alias(libs.plugins.gobleyUniffi)
     alias(libs.plugins.mavenPublish)
 }
 
@@ -48,14 +47,13 @@ rust {
     }
 }
 
-uniffi {
-    generateFromLibrary {
-        build.set(GobleyHost.current.rustTarget)
-    }
-}
+// UniFFI bindings are now vendored as pure-FFM Java under src/main/java/uniffi/ (generated
+// by IronCoreLabs/uniffi-bindgen-java), replacing the gobleyUniffi JNA codegen so the library
+// works in GraalVM native-image. Regenerate with:
+//   uniffi-bindgen-java generate --out-dir src/main/java target/<triple>/release/<cdylib>
 
 kotlin {
-    jvmToolchain(17)
+    jvmToolchain(22)
 }
 
 sourceSets {
@@ -65,13 +63,12 @@ sourceSets {
 }
 
 dependencies {
-    implementation(libs.jna)
     implementation(libs.skiko.awt)
 }
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile>().configureEach {
     compilerOptions {
-        jvmTarget.set(JvmTarget.JVM_17)
+        jvmTarget.set(JvmTarget.JVM_22)
     }
 }
 
@@ -107,7 +104,7 @@ tasks.withType<RustUpTargetAddTask>().configureEach {
 
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(17)
+        languageVersion = JavaLanguageVersion.of(22)
     }
 }
 
