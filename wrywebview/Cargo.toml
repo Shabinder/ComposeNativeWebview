@@ -12,7 +12,9 @@ path = "src/main/rust/lib.rs"
 [dependencies]
 thiserror = "2.0.11"
 uniffi = "0.31.0"
-wry = { version = "0.55.1", features = ["devtools"] }
+# Shabinder/wry fork off wry-v0.55.1: fixes the Windows ARM64 WebView2 deadlock (white screen) by
+# replacing wait_with_pump with CoWaitForMultipleHandles. Upstream PR tauri-apps/wry#1666 is stalled.
+wry = { git = "https://github.com/Shabinder/wry.git", rev = "2761ef1b7f8e1f30716e2e8c46cb142ced7cb1e0", features = ["devtools"] }
 
 [profile.release]
 opt-level = "z"
