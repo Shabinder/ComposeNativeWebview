@@ -88,6 +88,11 @@ private fun AndroidWebViewContainer(
                     this.webViewClient = client
                     this.webChromeClient = chromeClient
 
+                    // OAuth redirects (e.g. Spotify accounts -> open.spotify.com) set the session
+                    // cookie across sibling subdomains; Android blocks third-party cookies in
+                    // WebView by default, so that cookie is dropped and login never completes.
+                    android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+
                     configureSettings(this, state.webSettings)
                     setBackgroundColor(state.webSettings.backgroundColor.toArgb())
 
@@ -117,6 +122,12 @@ private fun AndroidWebViewContainer(
 private fun configureSettings(webView: WebView, settings: WebSettings) {
     webView.settings.apply {
         javaScriptEnabled = settings.isJavaScriptEnabled
+        // Required for OAuth login flows that persist session state in localStorage/sessionStorage
+        // (Spotify's accounts.spotify.com login never completes without it — the sp_dc session
+        // cookie is never written). Android defaults this to false. Additive: pure-cookie logins
+        // like Google/YouTube are unaffected.
+        domStorageEnabled = true
+        databaseEnabled = true
         userAgentString = settings.customUserAgentString
         setSupportZoom(settings.supportZoom)
         allowFileAccessFromFileURLs = settings.allowFileAccessFromFileURLs
