@@ -57,7 +57,17 @@ class WryWebViewPanel(
     private val handlers = mutableListOf<(String) -> Boolean>()
 
     private val handler = object : NavigationHandler {
-        override fun handleNavigation(url: String): Boolean = handlers.any { it(url) }
+        /**
+         * The native contract is "return true to allow navigation, false to cancel".
+         *
+         * `handlers.any { ... }` on an EMPTY list returns false, so a panel with no navigate
+         * listener registered - the default - cancelled every navigation it was asked to perform.
+         * loadUrl(), loadHtml() and even a data: URL all appeared to be silent no-ops: the
+         * document simply never changed, while evaluateJavaScript() kept working because it is not
+         * a navigation. Allow by default, and only let an explicitly registered listener veto.
+         */
+        override fun handleNavigation(url: String): Boolean =
+            handlers.isEmpty() || handlers.any { it(url) }
     }
 
     init {
