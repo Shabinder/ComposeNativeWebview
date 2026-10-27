@@ -24,7 +24,6 @@ plugins {
     alias(libs.plugins.kotlinAtomicfu)
     alias(libs.plugins.gobleyCargo)
     alias(libs.plugins.gobleyRust)
-    alias(libs.plugins.gobleyUniffi)
     alias(libs.plugins.mavenPublish)
 }
 
@@ -48,14 +47,13 @@ rust {
     }
 }
 
-uniffi {
-    generateFromLibrary {
-        build.set(GobleyHost.current.rustTarget)
-    }
-}
+// UniFFI bindings are now vendored as pure-FFM Java under src/main/java/uniffi/ (generated
+// by IronCoreLabs/uniffi-bindgen-java), replacing the gobleyUniffi JNA codegen so the library
+// works in GraalVM native-image. Regenerate with:
+//   uniffi-bindgen-java generate --out-dir src/main/java target/<triple>/release/<cdylib>
 
 kotlin {
-    jvmToolchain(17)
+    jvmToolchain(22)
 }
 
 sourceSets {
@@ -65,50 +63,51 @@ sourceSets {
 }
 
 dependencies {
-    implementation(libs.jna)
     implementation(libs.skiko.awt)
 }
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile>().configureEach {
     compilerOptions {
-        jvmTarget.set(JvmTarget.JVM_17)
+        // Toolchain is 22 so the vendored FFM bindings see java.lang.foreign, but emit 21
+        // bytecode (no --release, so foreign stays visible) — keeps the artifact resolvable by
+        // JVM-21 consumers like SoundBound's desktop classpath; it runs on a JDK 22+ runtime.
+        jvmTarget.set(JvmTarget.JVM_21)
     }
 }
 
+// Prebuilt-library skip — config-cache SAFE. The prebuilt path is resolved at CONFIGURATION time
+// (Project.prebuiltRustLibrary) and only a plain Boolean/File is captured into the onlyIf closure;
+// `project`/`Task.project` is NEVER touched at execution time (doing so throws under Gradle's
+// configuration cache — gobley's RustUpTargetAddTask hit exactly that). When a prebuilt cdylib
+// exists for a triple, the cargo build AND the rustup-target-add are skipped for it — INCLUDING the
+// host target (we deliberately do NOT special-case the host: a committed/cached dylib should skip
+// the slow Rust build everywhere so consumers like SoundBound keep configuration-cache + Gradle
+// build-cache hits). Delete target/<triple>/release/<lib> (or run a clean) to force a real rebuild.
 tasks.withType<CargoBuildTask>().configureEach {
-    onlyIf {
-        val rustTarget = target.orNull ?: return@onlyIf true
-        val triple = rustTarget.rustTriple
-        val prebuiltLib = project.prebuiltRustLibrary(triple)
-        val isHostTarget = GobleyHost.current.rustTarget.rustTriple == triple
-        !prebuiltLib.exists() || isHostTarget
-    }
+    val prebuiltExists = target.orNull?.let { project.prebuiltRustLibrary(it.rustTriple).exists() } ?: false
+    onlyIf { !prebuiltExists }
 }
 
 tasks.withType<FindDynamicLibrariesTask>().configureEach {
-    val rustTarget = rustTarget.orNull ?: return@configureEach
-    val triple = rustTarget.rustTriple
-    val prebuiltLib = project.prebuiltRustLibrary(triple)
-    val isHostTarget = GobleyHost.current.rustTarget.rustTriple == triple
-    if (prebuiltLib.exists() && !isHostTarget) {
+    val rt = rustTarget.orNull ?: return@configureEach
+    val prebuiltLib = project.prebuiltRustLibrary(rt.rustTriple)
+    if (prebuiltLib.exists()) {
         searchPaths.set(listOf(prebuiltLib.parentFile))
     }
 }
 
 tasks.withType<RustUpTargetAddTask>().configureEach {
-    onlyIf {
-        val rustTarget = rustTarget.orNull ?: return@onlyIf true
-        val triple = rustTarget.rustTriple
-        val prebuiltLib = project.prebuiltRustLibrary(triple)
-        val isHostTarget = GobleyHost.current.rustTarget.rustTriple == triple
-        !prebuiltLib.exists() || isHostTarget
-    }
+    val prebuiltExists = rustTarget.orNull?.let { project.prebuiltRustLibrary(it.rustTriple).exists() } ?: false
+    onlyIf { !prebuiltExists }
 }
 
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(17)
+        languageVersion = JavaLanguageVersion.of(22)
     }
+    // Compile with JDK 22 (FFM visible) but emit 21 bytecode so JVM-21 consumers can resolve it.
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
 }
 
 mavenPublishing {

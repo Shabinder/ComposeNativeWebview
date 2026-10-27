@@ -1,0 +1,276 @@
+{
+  "reflection": [
+    {
+      "type": "uniffi.composewebview_wry.UniffiCallbackInterfaceClone$Fn",
+      "methods": [
+        {
+          "name": "callback",
+          "parameterTypes": [
+            "long"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "uniffi.composewebview_wry.UniffiCallbackInterfaceFree$Fn",
+      "methods": [
+        {
+          "name": "callback",
+          "parameterTypes": [
+            "long"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "uniffi.composewebview_wry.UniffiCallbackInterfaceJavaScriptCallbackMethod0$Fn",
+      "methods": [
+        {
+          "name": "callback",
+          "parameterTypes": [
+            "long",
+            "java.lang.foreign.MemorySegment",
+            "java.lang.foreign.MemorySegment",
+            "java.lang.foreign.MemorySegment"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "uniffi.composewebview_wry.UniffiCallbackInterfaceNativeLoggerMethod0$Fn",
+      "methods": [
+        {
+          "name": "callback",
+          "parameterTypes": [
+            "long",
+            "java.lang.foreign.MemorySegment",
+            "java.lang.foreign.MemorySegment",
+            "java.lang.foreign.MemorySegment"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "uniffi.composewebview_wry.UniffiCallbackInterfaceNavigationHandlerMethod0$Fn",
+      "methods": [
+        {
+          "name": "callback",
+          "parameterTypes": [
+            "long",
+            "java.lang.foreign.MemorySegment",
+            "java.lang.foreign.MemorySegment",
+            "java.lang.foreign.MemorySegment"
+          ]
+        }
+      ]
+    }
+  ],
+  "foreign": {
+    "upcalls": [
+      {
+        "returnType": "jlong",
+        "parameterTypes": [
+          "jlong"
+        ]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": [
+          "jlong",
+          "struct(jlong,jlong,void*)",
+          "void*",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": [
+          "jlong"
+        ]
+      }
+    ],
+    "downcalls": [
+      {
+        "returnType": "void",
+        "parameterTypes": [
+          "jlong",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "struct(jlong,jlong,void*)",
+        "parameterTypes": [
+          "jlong",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "struct(jlong,jlong,void*)",
+        "parameterTypes": [
+          "struct(jint,padding(4),void*)",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": [
+          "jlong",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "struct(jlong,jlong,void*)",
+        "parameterTypes": [
+          "struct(jlong,jlong,void*)",
+          "jlong",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "jshort",
+        "parameterTypes": []
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": [
+          "jlong",
+          "struct(jlong,jlong,void*)",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": [
+          "jlong",
+          "jint",
+          "jint",
+          "jint",
+          "jint",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "jfloat",
+        "parameterTypes": [
+          "jlong",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "jbyte",
+        "parameterTypes": [
+          "jlong",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": [
+          "void*"
+        ]
+      },
+      {
+        "returnType": "jshort",
+        "parameterTypes": [
+          "jlong",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": [
+          "jbyte",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": [
+          "struct(jlong,jlong,void*)",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": [
+          "jlong",
+          "struct(jlong,jlong,void*)",
+          "jlong",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "struct(jlong,jlong,void*)",
+        "parameterTypes": [
+          "jlong",
+          "struct(jlong,jlong,void*)",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": []
+      },
+      {
+        "returnType": "jlong",
+        "parameterTypes": [
+          "jlong",
+          "jint",
+          "jint",
+          "struct(jlong,jlong,void*)",
+          "struct(jlong,jlong,void*)",
+          "struct(jlong,jlong,void*)",
+          "jbyte",
+          "jbyte",
+          "struct(jlong,jlong,void*)",
+          "struct(jlong,jlong,void*)",
+          "jbyte",
+          "jbyte",
+          "jbyte",
+          "jbyte",
+          "jbyte",
+          "jbyte",
+          "struct(jlong,jlong,void*)",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": [
+          "jlong",
+          "void*",
+          "jlong"
+        ]
+      },
+      {
+        "returnType": "jlong",
+        "parameterTypes": [
+          "jlong",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "jdouble",
+        "parameterTypes": [
+          "jlong",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": [
+          "jlong",
+          "struct(jlong,jlong,void*)",
+          "struct(jlong,jlong,void*)",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": [
+          "jlong"
+        ]
+      }
+    ]
+  }
+}

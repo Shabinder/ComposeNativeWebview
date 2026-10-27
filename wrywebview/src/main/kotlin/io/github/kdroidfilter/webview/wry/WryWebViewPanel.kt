@@ -1,10 +1,16 @@
 package io.github.kdroidfilter.webview.wry
 
-import com.sun.jna.Native
 import java.awt.BorderLayout
 import java.awt.Component
+import java.awt.Window
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import java.lang.foreign.Arena
+import java.lang.foreign.FunctionDescriptor
+import java.lang.foreign.Linker
+import java.lang.foreign.MemorySegment
+import java.lang.foreign.SymbolLookup
+import java.lang.foreign.ValueLayout
 import javax.swing.JPanel
 import javax.swing.SwingUtilities
 import javax.swing.Timer
@@ -51,7 +57,17 @@ class WryWebViewPanel(
     private val handlers = mutableListOf<(String) -> Boolean>()
 
     private val handler = object : NavigationHandler {
-        override fun handleNavigation(url: String): Boolean = handlers.any { it(url) }
+        /**
+         * The native contract is "return true to allow navigation, false to cancel".
+         *
+         * `handlers.any { ... }` on an EMPTY list returns false, so a panel with no navigate
+         * listener registered - the default - cancelled every navigation it was asked to perform.
+         * loadUrl(), loadHtml() and even a data: URL all appeared to be silent no-ops: the
+         * document simply never changed, while evaluateJavaScript() kept working because it is not
+         * a navigation. Allow by default, and only let an explicitly registered listener veto.
+         */
+        override fun handleNavigation(url: String): Boolean =
+            handlers.isEmpty() || handlers.any { it(url) }
     }
 
     init {
@@ -410,6 +426,7 @@ class WryWebViewPanel(
         }
 
         if (!IS_MAC) {
+            if (IS_WINDOWS) ensureWebViewSta()
             return try {
                 webviewId = NativeBindings.createWebview(
                     parentHandle = handleSnapshot,
@@ -644,12 +661,40 @@ class WryWebViewPanel(
         pendingBounds = null
     }
 
-    private fun componentHandle(component: Component): ULong {
+    // Reads skiko's getWindowHandle() off a Compose/Skiko window via reflection. We can't compile
+    // against compose-ui (this module only depends on skiko-awt), and the value is the same HWND on
+    // both androidx.compose.ui.awt.ComposeWindow#getWindowHandle and org.jetbrains.skiko.SkiaLayer.
+    // JNI-backed inside skiko -> GraalVM-native-image safe (unlike the removed JNA getComponentID).
+    private fun windowsHwndViaReflection(window: Window): Long =
+        try {
+            val m = window.javaClass.getMethod("getWindowHandle")
+            (m.invoke(window) as? Long) ?: 0L
+        } catch (_: ReflectiveOperationException) {
+            0L
+        }
+
+    private fun windowsRootHwnd(hwnd: Long): Long {
+        val handle = GET_ANCESTOR ?: return hwnd
         return try {
-            Native.getComponentID(component).toULong()
-        } catch (e: RuntimeException) {
-            log("componentHandle failed for ${component.javaClass.name}: ${e.message}")
-            0UL
+            val root = handle.invokeExact(hwnd, GA_ROOT) as Long
+            if (root != 0L) root else hwnd
+        } catch (_: Throwable) {
+            hwnd
+        }
+    }
+
+    private fun ensureWebViewSta() {
+        val handle = CO_INITIALIZE_EX ?: return
+        try {
+            val hr = handle.invokeExact(MemorySegment.NULL, COINIT_APARTMENTTHREADED) as Int
+            val verdict = when (hr) {
+                S_OK, S_FALSE -> "OK (thread now STA)"
+                RPC_E_CHANGED_MODE -> "RPC_E_CHANGED_MODE (thread already MTA -> needs dedicated STA thread)"
+                else -> "hr=0x${Integer.toHexString(hr)}"
+            }
+            log("ensureWebViewSta CoInitializeEx(STA) on ${Thread.currentThread().name} -> $verdict")
+        } catch (t: Throwable) {
+            log("ensureWebViewSta failed: ${t.message}")
         }
     }
 
@@ -663,14 +708,18 @@ class WryWebViewPanel(
         val contentHandle = safeSkikoHandle("content") { SkikoInterop.getContentHandle(host) }
         val windowHandle = safeSkikoHandle("window") { SkikoInterop.getWindowHandle(host) }
         if (IS_WINDOWS) {
-            // On Windows, use the window handle and position webview manually
-            // Canvas HWND doesn't work well as WebView2 parent
+            // On Windows, parent the webview to the top-level window HWND and position it manually
+            // (the Skiko Canvas child HWND is a poor WebView2 parent). JNA-free: read the HWND from
+            // the Compose/Skiko window via reflection (skiko's getWindowHandle() is a JNI call, not
+            // JNA, so it survives GraalVM native-image), then normalize it to the root frame HWND
+            // with a plain user32!GetAncestor downcall (no JNIEnv* needed, unlike JAWT).
             val window = SwingUtilities.getWindowAncestor(host)
             if (window != null && window.isDisplayable && window.isShowing) {
-                val windowHandleJna = componentHandle(window)
-                if (windowHandleJna != 0UL) {
-                    log("resolveParentHandle jna window=0x${windowHandleJna.toString(16)} (windows)")
-                    return ParentHandle(windowHandleJna, true)
+                val raw = windowsHwndViaReflection(window)
+                if (raw != 0L) {
+                    val root = windowsRootHwnd(raw)
+                    log("resolveParentHandle skiko window=0x${root.toString(16)} (windows)")
+                    return ParentHandle(root.toULong(), true)
                 }
             }
         } else if (IS_MAC) {
@@ -709,18 +758,6 @@ class WryWebViewPanel(
             }
         }
 
-        val hostHandle = componentHandle(host)
-        if (hostHandle != 0UL) {
-            log("resolveParentHandle jna host=0x${hostHandle.toString(16)}")
-            return ParentHandle(hostHandle, false)
-        }
-        val window = SwingUtilities.getWindowAncestor(host) ?: return null
-        if (!window.isDisplayable || !window.isShowing) return null
-        val windowHandleFallback = componentHandle(window)
-        if (windowHandleFallback != 0UL) {
-            log("resolveParentHandle jna window=0x${windowHandleFallback.toString(16)}")
-            return ParentHandle(windowHandleFallback, true)
-        }
         log("resolveParentHandle no handles (content=0 window=0)")
         return null
     }
@@ -757,6 +794,55 @@ class WryWebViewPanel(
         private val IS_LINUX = OS_NAME.contains("linux")
         private val IS_MAC = OS_NAME.contains("mac")
         private val IS_WINDOWS = OS_NAME.contains("windows")
+
+        // COM apartment constants + HRESULTs for the WebView2 STA requirement.
+        private const val COINIT_APARTMENTTHREADED = 0x2
+        private const val S_OK = 0x0
+        private const val S_FALSE = 0x1
+        private const val RPC_E_CHANGED_MODE = 0x80010106.toInt()
+
+        // ole32!CoInitializeEx via FFM. WebView2 requires the calling thread to be STA; the JVM
+        // tends to leave the AWT EDT as MTA (OLE/clipboard/DnD), which makes wry's own ignored
+        // CoInitializeEx(STA) a no-op and WebView2 creation fail with RPC_E_CHANGED_MODE. We
+        // explicitly put the EDT into STA before creating the webview, and surface the HRESULT.
+        private val CO_INITIALIZE_EX by lazy {
+            if (!IS_WINDOWS) {
+                null
+            } else {
+                runCatching {
+                    val ole32 = SymbolLookup.libraryLookup("ole32.dll", Arena.global())
+                    Linker.nativeLinker().downcallHandle(
+                        ole32.find("CoInitializeEx").orElseThrow(),
+                        FunctionDescriptor.of(
+                            ValueLayout.JAVA_INT,
+                            ValueLayout.ADDRESS,
+                            ValueLayout.JAVA_INT,
+                        ),
+                    )
+                }.getOrNull()
+            }
+        }
+
+        private const val GA_ROOT = 2
+        // user32!GetAncestor(HWND, GA_ROOT) via FFM: a plain Win32 call (no JNIEnv*), used to walk
+        // a child/canvas HWND up to its top-level frame HWND for use as the WebView2 parent.
+        private val GET_ANCESTOR by lazy {
+            if (!IS_WINDOWS) {
+                null
+            } else {
+                runCatching {
+                    val user32 = SymbolLookup.libraryLookup("user32.dll", Arena.global())
+                    Linker.nativeLinker().downcallHandle(
+                        user32.find("GetAncestor").orElseThrow(),
+                        FunctionDescriptor.of(
+                            ValueLayout.JAVA_LONG,
+                            ValueLayout.JAVA_LONG,
+                            ValueLayout.JAVA_INT,
+                        ),
+                    )
+                }.getOrNull()
+            }
+        }
         var LOG_ENABLED = run {
             val raw =
                 System.getProperty("composewebview.wry.log") ?: System.getenv("WRYWEBVIEW_LOG")
@@ -773,7 +859,7 @@ class WryWebViewPanel(
         var NATIVE_LOGGER: (String) -> Unit = { System.err.println(it) }
 
         init {
-            setNativeLogger(
+            uniffi.composewebview_wry.ComposewebviewWry.setNativeLogger(
                 object : NativeLogger {
                     override fun handleLog(data: String) {
                         if (LOG_ENABLED) {
@@ -786,7 +872,11 @@ class WryWebViewPanel(
     }
 }
 
+// Delegates to the vendored pure-FFM Java bindings (uniffi.composewebview_wry.ComposewebviewWry).
+// The native side uses i64 handles, exposed as Java `long`; this layer is the sole ULong<->long
+// boundary so the rest of WryWebViewPanel keeps its ULong handle type unchanged.
 private object NativeBindings {
+    private val ffi = uniffi.composewebview_wry.ComposewebviewWry::class.java // ensure class init
 
     fun createWebview(
         parentHandle: ULong,
@@ -806,133 +896,64 @@ private object NativeBindings {
         autoplay: Boolean,
         focused: Boolean,
         navHandler: NavigationHandler?
-    ): ULong {
-        return io.github.kdroidfilter.webview.wry.createWebview(
-            parentHandle = parentHandle,
-            width = width,
-            height = height,
-            url = url,
-            userAgent = userAgent,
-            dataDirectory = dataDirectory,
-            zoom = zoom,
-            transparent = transparent,
-            backgroundColor = backgroundColor,
-            initScript = initScript,
-            clipboard = clipboard,
-            devTools = devTools,
-            navigationGestures = navigationGestures,
-            incognito = incognito,
-            autoplay = autoplay,
-            focused = focused,
-            navHandler = navHandler
+    ): ULong = uniffi.composewebview_wry.ComposewebviewWry.createWebview(
+        parentHandle.toLong(), width, height, url, userAgent, dataDirectory, zoom, transparent,
+        backgroundColor, initScript, clipboard, devTools, navigationGestures, incognito, autoplay,
+        focused, navHandler,
+    ).toULong()
+
+    fun setBounds(id: ULong, x: Int, y: Int, width: Int, height: Int) =
+        uniffi.composewebview_wry.ComposewebviewWry.setBounds(id.toLong(), x, y, width, height)
+
+    fun loadUrl(id: ULong, url: String) =
+        uniffi.composewebview_wry.ComposewebviewWry.loadUrl(id.toLong(), url)
+
+    fun loadUrlWithHeaders(id: ULong, url: String, additionalHttpHeaders: Map<String, String>) =
+        uniffi.composewebview_wry.ComposewebviewWry.loadUrlWithHeaders(
+            id.toLong(), url, additionalHttpHeaders.map { (n, v) -> HttpHeader(n, v) },
         )
-    }
 
-    fun setBounds(id: ULong, x: Int, y: Int, width: Int, height: Int) {
-        io.github.kdroidfilter.webview.wry.setBounds(id, x, y, width, height)
-    }
+    fun loadHtml(id: ULong, html: String) =
+        uniffi.composewebview_wry.ComposewebviewWry.loadHtml(id.toLong(), html)
 
-    fun loadUrl(id: ULong, url: String) {
-        io.github.kdroidfilter.webview.wry.loadUrl(id, url)
-    }
+    fun goBack(id: ULong) = uniffi.composewebview_wry.ComposewebviewWry.goBack(id.toLong())
+    fun goForward(id: ULong) = uniffi.composewebview_wry.ComposewebviewWry.goForward(id.toLong())
+    fun reload(id: ULong) = uniffi.composewebview_wry.ComposewebviewWry.reload(id.toLong())
+    fun stopLoading(id: ULong) = uniffi.composewebview_wry.ComposewebviewWry.stopLoading(id.toLong())
 
-    fun loadUrlWithHeaders(id: ULong, url: String, additionalHttpHeaders: Map<String, String>) {
-        loadUrlWithHeaders(
-            id = id,
-            url = url,
-            headers = additionalHttpHeaders.map { (name, value) -> HttpHeader(name, value) },
-        )
-    }
+    fun evaluateJavaScript(id: ULong, script: String, callback: JavaScriptCallback) =
+        uniffi.composewebview_wry.ComposewebviewWry.evaluateJavascript(id.toLong(), script, callback)
 
-    fun loadHtml(id: ULong, html: String) {
-        io.github.kdroidfilter.webview.wry.loadHtml(id, html)
-    }
+    fun getUrl(id: ULong): String = uniffi.composewebview_wry.ComposewebviewWry.getUrl(id.toLong())
+    fun isLoading(id: ULong): Boolean = uniffi.composewebview_wry.ComposewebviewWry.isLoading(id.toLong())
+    fun getTitle(id: ULong): String = uniffi.composewebview_wry.ComposewebviewWry.getTitle(id.toLong())
+    fun canGoBack(id: ULong): Boolean = uniffi.composewebview_wry.ComposewebviewWry.canGoBack(id.toLong())
+    fun canGoForward(id: ULong): Boolean = uniffi.composewebview_wry.ComposewebviewWry.canGoForward(id.toLong())
 
-    fun goBack(id: ULong) {
-        io.github.kdroidfilter.webview.wry.goBack(id)
-    }
+    fun drainIpcMessages(id: ULong): List<String> =
+        uniffi.composewebview_wry.ComposewebviewWry.drainIpcMessages(id.toLong())
 
-    fun goForward(id: ULong) {
-        io.github.kdroidfilter.webview.wry.goForward(id)
-    }
+    fun getCookiesForUrl(id: ULong, url: String): List<WebViewCookie> =
+        uniffi.composewebview_wry.ComposewebviewWry.getCookiesForUrl(id.toLong(), url)
 
-    fun reload(id: ULong) {
-        io.github.kdroidfilter.webview.wry.reload(id)
-    }
+    fun getCookies(id: ULong): List<WebViewCookie> =
+        uniffi.composewebview_wry.ComposewebviewWry.getCookies(id.toLong())
 
-    fun stopLoading(id: ULong) {
-        io.github.kdroidfilter.webview.wry.stopLoading(id)
-    }
+    fun clearCookiesForUrl(id: ULong, url: String) =
+        uniffi.composewebview_wry.ComposewebviewWry.clearCookiesForUrl(id.toLong(), url)
 
-    fun evaluateJavaScript(id: ULong, script: String, callback: JavaScriptCallback) {
-        evaluateJavascript(id, script, callback)
-    }
+    fun clearAllCookies(id: ULong) =
+        uniffi.composewebview_wry.ComposewebviewWry.clearAllCookies(id.toLong())
 
-    fun getUrl(id: ULong): String {
-        return io.github.kdroidfilter.webview.wry.getUrl(id)
-    }
+    fun setCookie(id: ULong, cookie: WebViewCookie) =
+        uniffi.composewebview_wry.ComposewebviewWry.setCookie(id.toLong(), cookie)
 
-    fun isLoading(id: ULong): Boolean {
-        return io.github.kdroidfilter.webview.wry.isLoading(id)
-    }
+    fun destroyWebview(id: ULong) =
+        uniffi.composewebview_wry.ComposewebviewWry.destroyWebview(id.toLong())
 
-    fun getTitle(id: ULong): String {
-        return io.github.kdroidfilter.webview.wry.getTitle(id)
-    }
-
-    fun canGoBack(id: ULong): Boolean {
-        return io.github.kdroidfilter.webview.wry.canGoBack(id)
-    }
-
-    fun canGoForward(id: ULong): Boolean {
-        return io.github.kdroidfilter.webview.wry.canGoForward(id)
-    }
-
-    fun drainIpcMessages(id: ULong): List<String> {
-        return io.github.kdroidfilter.webview.wry.drainIpcMessages(id)
-    }
-
-    fun getCookiesForUrl(id: ULong, url: String): List<WebViewCookie> {
-        return io.github.kdroidfilter.webview.wry.getCookiesForUrl(id, url)
-    }
-
-    fun getCookies(id: ULong): List<WebViewCookie> {
-        return io.github.kdroidfilter.webview.wry.getCookies(id)
-    }
-
-    fun clearCookiesForUrl(id: ULong, url: String) {
-        io.github.kdroidfilter.webview.wry.clearCookiesForUrl(id, url)
-    }
-
-    fun clearAllCookies(id: ULong) {
-        io.github.kdroidfilter.webview.wry.clearAllCookies(id)
-    }
-
-    fun setCookie(id: ULong, cookie: WebViewCookie) {
-        io.github.kdroidfilter.webview.wry.setCookie(id, cookie)
-    }
-
-    fun destroyWebview(id: ULong) {
-        io.github.kdroidfilter.webview.wry.destroyWebview(id)
-    }
-
-    fun pumpGtkEvents() {
-        io.github.kdroidfilter.webview.wry.pumpGtkEvents()
-    }
-
-    fun pumpWindowsEvents() {
-        io.github.kdroidfilter.webview.wry.pumpWindowsEvents()
-    }
-
-    fun focus(id: ULong) {
-        io.github.kdroidfilter.webview.wry.focus(id)
-    }
-
-    fun openDevTools(id: ULong) {
-        io.github.kdroidfilter.webview.wry.openDevTools(id)
-    }
-
-    fun closeDevTools(id: ULong) {
-        io.github.kdroidfilter.webview.wry.closeDevTools(id)
-    }
+    fun pumpGtkEvents() = uniffi.composewebview_wry.ComposewebviewWry.pumpGtkEvents()
+    fun pumpWindowsEvents() = uniffi.composewebview_wry.ComposewebviewWry.pumpWindowsEvents()
+    fun focus(id: ULong) = uniffi.composewebview_wry.ComposewebviewWry.focus(id.toLong())
+    fun openDevTools(id: ULong) = uniffi.composewebview_wry.ComposewebviewWry.openDevTools(id.toLong())
+    fun closeDevTools(id: ULong) = uniffi.composewebview_wry.ComposewebviewWry.closeDevTools(id.toLong())
 }
