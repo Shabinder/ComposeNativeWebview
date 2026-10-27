@@ -75,30 +75,31 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile>().configureEa
     }
 }
 
-// Prebuilt-library skip — config-cache SAFE. The prebuilt path is resolved at CONFIGURATION time
-// (Project.prebuiltRustLibrary) and only a plain Boolean/File is captured into the onlyIf closure;
-// `project`/`Task.project` is NEVER touched at execution time (doing so throws under Gradle's
-// configuration cache — gobley's RustUpTargetAddTask hit exactly that). When a prebuilt cdylib
-// exists for a triple, the cargo build AND the rustup-target-add are skipped for it — INCLUDING the
-// host target (we deliberately do NOT special-case the host: a committed/cached dylib should skip
-// the slow Rust build everywhere so consumers like SoundBound keep configuration-cache + Gradle
-// build-cache hits). Delete target/<triple>/release/<lib> (or run a clean) to force a real rebuild.
+// Host libraries always participate in Cargo/Gradle input checking. A cached target directory
+// accelerates compilation; existence of a dylib is not evidence that it matches current sources.
+// Cross-target resources are assembled on their native release runners; this host may only use
+// an already supplied foreign library. No Project access occurs inside onlyIf (configuration cache).
 tasks.withType<CargoBuildTask>().configureEach {
-    val prebuiltExists = target.orNull?.let { project.prebuiltRustLibrary(it.rustTriple).exists() } ?: false
-    onlyIf { !prebuiltExists }
+    inputs.files(fileTree("src") { include("**/*.rs", "**/*.udl") })
+    inputs.files("Cargo.toml", "Cargo.lock")
+    inputs.files(fileTree(projectDir) { include("build.rs", "rust-toolchain", "rust-toolchain.toml", ".cargo/config*", "*.h") })
+    val isHost = target.orNull == GobleyHost.current.rustTarget
+    val foreignPrebuilt = !isHost && target.orNull?.let { project.prebuiltRustLibrary(it.rustTriple).exists() } == true
+    onlyIf { !foreignPrebuilt }
 }
 
 tasks.withType<FindDynamicLibrariesTask>().configureEach {
     val rt = rustTarget.orNull ?: return@configureEach
     val prebuiltLib = project.prebuiltRustLibrary(rt.rustTriple)
-    if (prebuiltLib.exists()) {
+    if (rt != GobleyHost.current.rustTarget && prebuiltLib.exists()) {
         searchPaths.set(listOf(prebuiltLib.parentFile))
     }
 }
 
 tasks.withType<RustUpTargetAddTask>().configureEach {
-    val prebuiltExists = rustTarget.orNull?.let { project.prebuiltRustLibrary(it.rustTriple).exists() } ?: false
-    onlyIf { !prebuiltExists }
+    val foreignPrebuilt = rustTarget.orNull != GobleyHost.current.rustTarget &&
+        rustTarget.orNull?.let { project.prebuiltRustLibrary(it.rustTriple).exists() } == true
+    onlyIf { !foreignPrebuilt }
 }
 
 java {
