@@ -62,6 +62,12 @@ kotlin {
 }
 
 android {
+    // AGP 9.5 creates a Compose Preview task per variant and fails IDE sync unless unit tests
+    // get compiled Android resources.
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
+
     namespace = "io.github.kdroidfilter.webview"
     compileSdk = 35
 

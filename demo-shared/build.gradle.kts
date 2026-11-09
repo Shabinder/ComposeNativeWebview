@@ -81,6 +81,12 @@ android {
         jvmToolchain(17)
     }
 
+    // AGP 9.5 creates a Compose Preview task per variant and fails IDE sync unless unit tests
+    // get compiled Android resources.
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
+
     // Lint is unstable with this KMP + AGP setup in CI.
     lint {
         abortOnError = false
