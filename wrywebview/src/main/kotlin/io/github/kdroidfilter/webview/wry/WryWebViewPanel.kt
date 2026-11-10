@@ -303,7 +303,8 @@ class WryWebViewPanel(
                 .getOrDefault(emptyList())
         }
 
-        if (SwingUtilities.isEventDispatchThread()) action() else SwingUtilities.invokeAndWait(
+        // macOS: NativeBindings already hands the call to its AppKit caller thread, so no EDT hop.
+        if (IS_MAC || SwingUtilities.isEventDispatchThread()) action() else SwingUtilities.invokeAndWait(
             action
         )
         return result
@@ -322,7 +323,8 @@ class WryWebViewPanel(
                 .getOrDefault(emptyList())
         }
 
-        if (SwingUtilities.isEventDispatchThread()) action() else SwingUtilities.invokeAndWait(
+        // macOS: NativeBindings already hands the call to its AppKit caller thread, so no EDT hop.
+        if (IS_MAC || SwingUtilities.isEventDispatchThread()) action() else SwingUtilities.invokeAndWait(
             action
         )
         return result
@@ -875,8 +877,44 @@ class WryWebViewPanel(
 // Delegates to the vendored pure-FFM Java bindings (uniffi.composewebview_wry.ComposewebviewWry).
 // The native side uses i64 handles, exposed as Java `long`; this layer is the sole ULong<->long
 // boundary so the rest of WryWebViewPanel keeps its ULong handle type unchanged.
+//
+// macOS: most of these calls dispatch_sync onto the AppKit main thread. Made from the Swing EDT that
+// deadlocks whenever AppKit is itself waiting on the EDT, which is exactly what the JDK's accessibility
+// bridge does (CAccessibility -> LWCToolkit.invokeAndWait) for every VoiceOver / AX query: AppKit waits
+// on the EDT, the EDT waits on AppKit, and every window turns inaccessible for good. So on macOS every
+// main-thread-bound call is handed to one serial "wry-appkit" thread instead. One thread keeps the order
+// the panel issued them in; void calls are fire-and-forget, cookie reads block only their caller.
 private object NativeBindings {
     private val ffi = uniffi.composewebview_wry.ComposewebviewWry::class.java // ensure class init
+    private val IS_MAC = System.getProperty("os.name")?.lowercase().orEmpty().contains("mac")
+    private val appKitCaller by lazy {
+        java.util.concurrent.Executors.newSingleThreadExecutor { Thread(it, APPKIT_CALLER).apply { isDaemon = true } }
+    }
+    const val APPKIT_CALLER = "wry-appkit"
+
+    /** Runs a void main-thread-bound call; on macOS asynchronously on [APPKIT_CALLER], never the EDT. */
+    private fun post(onError: (Throwable) -> Unit = {}, block: () -> Unit) {
+        if (!IS_MAC) return block()
+        appKitCaller.execute { runCatching(block).onFailure(onError) }
+    }
+
+    /**
+     * Runs a main-thread-bound call that returns a value. On macOS it runs on [APPKIT_CALLER] behind any
+     * call already posted; a caller on the EDT gets a bounded wait instead of a deadlock.
+     */
+    private fun <T> call(block: () -> T): T {
+        if (!IS_MAC) return block()
+        val future = appKitCaller.submit(java.util.concurrent.Callable(block))
+        return try {
+            // ponytail: EDT callers time out (AppKit may be waiting on the EDT); move them off the EDT.
+            if (SwingUtilities.isEventDispatchThread()) future.get(EDT_WAIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+            else future.get()
+        } catch (e: java.util.concurrent.ExecutionException) {
+            throw e.cause ?: e
+        }
+    }
+
+    private const val EDT_WAIT_MS = 2_000L
 
     fun createWebview(
         parentHandle: ULong,
@@ -906,23 +944,27 @@ private object NativeBindings {
         uniffi.composewebview_wry.ComposewebviewWry.setBounds(id.toLong(), x, y, width, height)
 
     fun loadUrl(id: ULong, url: String) =
-        uniffi.composewebview_wry.ComposewebviewWry.loadUrl(id.toLong(), url)
+        post { uniffi.composewebview_wry.ComposewebviewWry.loadUrl(id.toLong(), url) }
 
-    fun loadUrlWithHeaders(id: ULong, url: String, additionalHttpHeaders: Map<String, String>) =
+    fun loadUrlWithHeaders(id: ULong, url: String, additionalHttpHeaders: Map<String, String>) = post {
         uniffi.composewebview_wry.ComposewebviewWry.loadUrlWithHeaders(
             id.toLong(), url, additionalHttpHeaders.map { (n, v) -> HttpHeader(n, v) },
         )
+    }
 
     fun loadHtml(id: ULong, html: String) =
-        uniffi.composewebview_wry.ComposewebviewWry.loadHtml(id.toLong(), html)
+        post { uniffi.composewebview_wry.ComposewebviewWry.loadHtml(id.toLong(), html) }
 
-    fun goBack(id: ULong) = uniffi.composewebview_wry.ComposewebviewWry.goBack(id.toLong())
-    fun goForward(id: ULong) = uniffi.composewebview_wry.ComposewebviewWry.goForward(id.toLong())
-    fun reload(id: ULong) = uniffi.composewebview_wry.ComposewebviewWry.reload(id.toLong())
-    fun stopLoading(id: ULong) = uniffi.composewebview_wry.ComposewebviewWry.stopLoading(id.toLong())
+    fun goBack(id: ULong) = post { uniffi.composewebview_wry.ComposewebviewWry.goBack(id.toLong()) }
+    fun goForward(id: ULong) = post { uniffi.composewebview_wry.ComposewebviewWry.goForward(id.toLong()) }
+    fun reload(id: ULong) = post { uniffi.composewebview_wry.ComposewebviewWry.reload(id.toLong()) }
+    fun stopLoading(id: ULong) = post { uniffi.composewebview_wry.ComposewebviewWry.stopLoading(id.toLong()) }
 
+    /** A failure reports "" to [callback], the same as the synchronous path's catch in the panel. */
     fun evaluateJavaScript(id: ULong, script: String, callback: JavaScriptCallback) =
-        uniffi.composewebview_wry.ComposewebviewWry.evaluateJavascript(id.toLong(), script, callback)
+        post(onError = { callback.onResult("") }) {
+            uniffi.composewebview_wry.ComposewebviewWry.evaluateJavascript(id.toLong(), script, callback)
+        }
 
     fun getUrl(id: ULong): String = uniffi.composewebview_wry.ComposewebviewWry.getUrl(id.toLong())
     fun isLoading(id: ULong): Boolean = uniffi.composewebview_wry.ComposewebviewWry.isLoading(id.toLong())
@@ -934,26 +976,26 @@ private object NativeBindings {
         uniffi.composewebview_wry.ComposewebviewWry.drainIpcMessages(id.toLong())
 
     fun getCookiesForUrl(id: ULong, url: String): List<WebViewCookie> =
-        uniffi.composewebview_wry.ComposewebviewWry.getCookiesForUrl(id.toLong(), url)
+        call { uniffi.composewebview_wry.ComposewebviewWry.getCookiesForUrl(id.toLong(), url) }
 
     fun getCookies(id: ULong): List<WebViewCookie> =
-        uniffi.composewebview_wry.ComposewebviewWry.getCookies(id.toLong())
+        call { uniffi.composewebview_wry.ComposewebviewWry.getCookies(id.toLong()) }
 
     fun clearCookiesForUrl(id: ULong, url: String) =
-        uniffi.composewebview_wry.ComposewebviewWry.clearCookiesForUrl(id.toLong(), url)
+        post { uniffi.composewebview_wry.ComposewebviewWry.clearCookiesForUrl(id.toLong(), url) }
 
     fun clearAllCookies(id: ULong) =
-        uniffi.composewebview_wry.ComposewebviewWry.clearAllCookies(id.toLong())
+        post { uniffi.composewebview_wry.ComposewebviewWry.clearAllCookies(id.toLong()) }
 
     fun setCookie(id: ULong, cookie: WebViewCookie) =
-        uniffi.composewebview_wry.ComposewebviewWry.setCookie(id.toLong(), cookie)
+        post { uniffi.composewebview_wry.ComposewebviewWry.setCookie(id.toLong(), cookie) }
 
     fun destroyWebview(id: ULong) =
         uniffi.composewebview_wry.ComposewebviewWry.destroyWebview(id.toLong())
 
     fun pumpGtkEvents() = uniffi.composewebview_wry.ComposewebviewWry.pumpGtkEvents()
     fun pumpWindowsEvents() = uniffi.composewebview_wry.ComposewebviewWry.pumpWindowsEvents()
-    fun focus(id: ULong) = uniffi.composewebview_wry.ComposewebviewWry.focus(id.toLong())
-    fun openDevTools(id: ULong) = uniffi.composewebview_wry.ComposewebviewWry.openDevTools(id.toLong())
-    fun closeDevTools(id: ULong) = uniffi.composewebview_wry.ComposewebviewWry.closeDevTools(id.toLong())
+    fun focus(id: ULong) = post { uniffi.composewebview_wry.ComposewebviewWry.focus(id.toLong()) }
+    fun openDevTools(id: ULong) = post { uniffi.composewebview_wry.ComposewebviewWry.openDevTools(id.toLong()) }
+    fun closeDevTools(id: ULong) = post { uniffi.composewebview_wry.ComposewebviewWry.closeDevTools(id.toLong()) }
 }
